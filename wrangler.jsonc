@@ -1,0 +1,6 @@
+{
+  "name": "twilio-caller-backend",
+  "compatibility_date": "2025-09-19",
+  "main": "src/index.js",
+  "node_compat": true
+}

@@ -1,0 +1,14 @@
+{
+  "name": "twilio-caller-backend",
+  "version": "1.0.0",
+  "description": "Twilio Cloudflare Worker for token generation",
+  "main": "src/index.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "twilio": "^5.2.2"
+  },
+  "type": "module"
+}

@@ -84,6 +84,13 @@ async function handleVoice(request, env, headers) {
     const to = formData.get('To');
     const { TWILIO_PHONE_NUMBER } = env; // Your Twilio phone number for Caller ID
 
+    if (!TWILIO_PHONE_NUMBER) {
+        console.error('TWILIO_PHONE_NUMBER environment variable not set in Cloudflare Worker.');
+        // Return a TwiML response with an error message
+        const errorTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Say>We're sorry, the application is not configured correctly. The caller ID is missing.</Say></Response>`;
+        return new Response(errorTwiml, { headers: { ...headers, 'Content-Type': 'text/xml' } });
+    }
+
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Dial callerId="${TWILIO_PHONE_NUMBER}">

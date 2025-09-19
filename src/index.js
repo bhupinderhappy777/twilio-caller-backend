@@ -1,153 +1,304 @@
+// Cloudflare Worker for Twilio Voice Dialer
+// Handles JWT token generation and TwiML responses
+
 export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    
-    // Handle CORS preflight requests
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-        },
-      });
-    }
+    async fetch(request, env, ctx) {
+        const url = new URL(request.url);
+        const path = url.pathname;
 
-    // Handle TwiML for outbound calls
-    if (url.pathname === '/voice') {
-      if (request.method === 'POST') {
-        try {
-          const formData = await request.formData();
-          const to = formData.get('To');
-          
-          // Create TwiML response for outbound call
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Dial callerId="${env.TWILIO_PHONE_NUMBER || '+1234567890'}">${to}</Dial>
-</Response>`;
-
-          return new Response(twiml, {
-            headers: {
-              'Content-Type': 'text/xml',
-              'Access-Control-Allow-Origin': '*',
-            },
-          });
-        } catch (error) {
-          return new Response(`<Response><Say>Error processing call</Say></Response>`, {
-            headers: {
-              'Content-Type': 'text/xml',
-              'Access-Control-Allow-Origin': '*',
-            },
-          });
-        }
-      } else {
-        // Handle GET requests to /voice (for testing)
-        return new Response(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say>This is the voice endpoint. Use POST with form data for actual calls.</Say>
-</Response>`, {
-          headers: {
-            'Content-Type': 'text/xml',
+        // Add CORS headers
+        const corsHeaders = {
             'Access-Control-Allow-Origin': '*',
-          },
-        });
-      }
-    }
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        };
 
-    // Handle debug endpoint
-    if (url.pathname === '/debug') {
-      return new Response(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        env_vars: {
-          TWILIO_ACCOUNT_SID: env.TWILIO_ACCOUNT_SID?.substring(0, 5) + '...',
-          TWILIO_AUTH_TOKEN: env.TWILIO_AUTH_TOKEN ? 'Present' : 'Missing',
-          TWILIO_TWIML_APP_SID: env.TWILIO_TWIML_APP_SID?.substring(0, 5) + '...',
-          TWILIO_PHONE_NUMBER: env.TWILIO_PHONE_NUMBER?.substring(0, 5) + '...',
+        // Handle preflight requests
+        if (request.method === 'OPTIONS') {
+            return new Response(null, { headers: corsHeaders });
         }
-      }, null, 2), {
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-      });
+
+        try {
+            // Token generation endpoint
+            if (path === '/token' && request.method === 'GET') {
+                return await generateAccessToken(env, corsHeaders);
+            }
+            
+            // Voice webhook endpoint
+            if (path === '/voice' && request.method === 'POST') {
+                return await handleVoiceWebhook(request, env, corsHeaders);
+            }
+            
+            // Debug endpoint
+            if (path === '/debug' && request.method === 'GET') {
+                return await handleDebug(env, corsHeaders);
+            }
+            
+            // TwiML App status check endpoint
+            if (path === '/check-twiml' && request.method === 'GET') {
+                return await checkTwiMLAppStatus(env, corsHeaders);
+            }
+
+            return new Response('Not Found', { status: 404, headers: corsHeaders });
+
+        } catch (error) {
+            console.error('Worker error:', error);
+            return new Response(
+                JSON.stringify({ 
+                    error: 'Internal server error', 
+                    message: error.message 
+                }), 
+                { 
+                    status: 500, 
+                    headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+                }
+            );
+        }
+    }
+};
+
+async function generateAccessToken(env, corsHeaders) {
+    const { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_TWIML_APP_SID } = env;
+
+    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_TWIML_APP_SID) {
+        return new Response(
+            JSON.stringify({ 
+                error: 'Missing environment variables',
+                required: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_TWIML_APP_SID']
+            }), 
+            { 
+                status: 500, 
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+            }
+        );
     }
 
-    // Handle token generation (ONLY for root path)
-    if (url.pathname === '/' || url.pathname === '') {
-      try {
-        // Create JWT manually using Account SID and Auth Token
+    try {
+        // Create JWT using Auth Token (not API Key)
         const header = {
-          "alg": "HS256",
-          "typ": "JWT"
+            "alg": "HS256",
+            "typ": "JWT"
         };
 
         const now = Math.floor(Date.now() / 1000);
         const payload = {
-          "iss": env.TWILIO_ACCOUNT_SID,  // Use Account SID instead of API Key
-          "sub": env.TWILIO_ACCOUNT_SID,
-          "exp": now + 3600, // 1 hour
-          "iat": now,
-          "nbf": now,
-          "jti": `${env.TWILIO_ACCOUNT_SID}-${now}`,  // Use Account SID
-          "grants": {
-            "identity": "user",
-            "voice": {
-              "outgoing": {
-                "application_sid": env.TWILIO_TWIML_APP_SID
-              },
-              "incoming": {
-                "allow": true
-              }
+            "iss": TWILIO_ACCOUNT_SID,  // Use Account SID as issuer for Auth Token
+            "exp": now + 3600,
+            "grants": {
+                "voice": {
+                    "incoming": {
+                        "allow": true
+                    },
+                    "outgoing": {
+                        "application_sid": TWILIO_TWIML_APP_SID
+                    }
+                }
             }
-          }
         };
 
-        // Simple JWT creation - FIXED VARIABLE DECLARATIONS
-        const encodedHeader = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-        const encodedPayload = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-        
-        const signatureInput = `${encodedHeader}.${encodedPayload}`;
-        
-        // Create HMAC-SHA256 signature using Auth Token
-        const key = new TextEncoder().encode(env.TWILIO_AUTH_TOKEN);
-        const data = new TextEncoder().encode(signatureInput);
-        
-        const cryptoKey = await crypto.subtle.importKey(
-          'raw',
-          key,
-          { name: 'HMAC', hash: 'SHA-256' },
-          false,
-          ['sign']
+        const token = await signJWT(header, payload, TWILIO_AUTH_TOKEN);
+
+        console.log('Generated token with:', {
+            issuer: TWILIO_ACCOUNT_SID,
+            appSid: TWILIO_TWIML_APP_SID,
+            tokenLength: token.length
+        });
+
+        return new Response(
+            JSON.stringify({ 
+                token: token,
+                debug: {
+                    issuer: TWILIO_ACCOUNT_SID,
+                    appSid: TWILIO_TWIML_APP_SID,
+                    tokenLength: token.length,
+                    expiresIn: 3600
+                }
+            }), 
+            { 
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+            }
         );
-        
-        const signature = await crypto.subtle.sign('HMAC', cryptoKey, data);
-        const encodedSignature = btoa(String.fromCharCode(...new Uint8Array(signature)))
-          .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-        
-        const token = `${encodedHeader}.${encodedPayload}.${encodedSignature}`;
-        
-        return new Response(JSON.stringify({ token }), {
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-          },
-        });
-        
-      } catch (error) {
-        return new Response(JSON.stringify({ 
-          error: error.message,
-          stack: error.stack 
-        }), {
-          status: 500,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-          },
-        });
-      }
+
+    } catch (error) {
+        console.error('Token generation failed:', error);
+        return new Response(
+            JSON.stringify({ 
+                error: 'Token generation failed', 
+                message: error.message 
+            }), 
+            { 
+                status: 500, 
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+            }
+        );
+    }
+}
+
+async function handleVoiceWebhook(request, env, corsHeaders) {
+    const { TWILIO_PHONE_NUMBER } = env;
+    
+    // Parse form data from Twilio
+    const formData = await request.formData();
+    const from = formData.get('From');
+    const to = formData.get('To');
+    
+    console.log('Voice call received:', { from, to });
+
+    // Generate TwiML response
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Dial callerId="${TWILIO_PHONE_NUMBER || from}">
+        <Number>${to}</Number>
+    </Dial>
+</Response>`;
+
+    return new Response(twiml, {
+        headers: { ...corsHeaders, 'Content-Type': 'text/xml' }
+    });
+}
+
+async function handleDebug(env, corsHeaders) {
+    const { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_TWIML_APP_SID, TWILIO_PHONE_NUMBER } = env;
+    
+    const debug = {
+        timestamp: new Date().toISOString(),
+        environment: {
+            accountSid: TWILIO_ACCOUNT_SID ? `${TWILIO_ACCOUNT_SID.substring(0, 10)}...` : 'NOT SET',
+            authToken: TWILIO_AUTH_TOKEN ? `${TWILIO_AUTH_TOKEN.substring(0, 10)}...` : 'NOT SET',
+            twimlAppSid: TWILIO_TWIML_APP_SID ? `${TWILIO_TWIML_APP_SID.substring(0, 10)}...` : 'NOT SET',
+            phoneNumber: TWILIO_PHONE_NUMBER || 'NOT SET'
+        },
+        status: 'Worker is running'
+    };
+
+    return new Response(JSON.stringify(debug, null, 2), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+}
+
+async function checkTwiMLAppStatus(env, corsHeaders) {
+    const { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_TWIML_APP_SID } = env;
+
+    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_TWIML_APP_SID) {
+        return new Response(
+            JSON.stringify({ 
+                success: false,
+                error: 'Missing environment variables',
+                required: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_TWIML_APP_SID']
+            }), 
+            { 
+                status: 400, 
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+            }
+        );
     }
 
-    // 404 for other paths
-    return new Response('Not Found', { status: 404 });
-  },
-};
+    try {
+        // Create Basic Auth header
+        const credentials = btoa(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`);
+        
+        // Call Twilio REST API to get TwiML App details
+        const response = await fetch(
+            `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Applications/${TWILIO_TWIML_APP_SID}.json`,
+            {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Basic ${credentials}`,
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            }
+        );
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Twilio API error:', response.status, errorText);
+            
+            return new Response(
+                JSON.stringify({ 
+                    success: false,
+                    error: `Twilio API error: ${response.status}`,
+                    details: errorText
+                }), 
+                { 
+                    status: response.status, 
+                    headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+                }
+            );
+        }
+
+        const twimlApp = await response.json();
+        
+        console.log('TwiML App details retrieved:', {
+            sid: twimlApp.sid,
+            name: twimlApp.friendly_name,
+            voiceUrl: twimlApp.voice_url,
+            voiceMethod: twimlApp.voice_method
+        });
+
+        return new Response(
+            JSON.stringify({ 
+                success: true,
+                twimlApp: {
+                    sid: twimlApp.sid,
+                    friendlyName: twimlApp.friendly_name,
+                    voiceUrl: twimlApp.voice_url,
+                    voiceMethod: twimlApp.voice_method,
+                    statusCallbackUrl: twimlApp.status_callback_url,
+                    statusCallbackMethod: twimlApp.status_callback_method,
+                    dateCreated: twimlApp.date_created,
+                    dateUpdated: twimlApp.date_updated
+                }
+            }), 
+            { 
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+            }
+        );
+
+    } catch (error) {
+        console.error('Error checking TwiML App:', error);
+        return new Response(
+            JSON.stringify({ 
+                success: false,
+                error: 'Failed to check TwiML App status', 
+                message: error.message 
+            }), 
+            { 
+                status: 500, 
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+            }
+        );
+    }
+}
+
+// JWT signing function using Web Crypto API
+async function signJWT(header, payload, secret) {
+    const encoder = new TextEncoder();
+    
+    // Encode header and payload
+    const encodedHeader = base64URLEncode(JSON.stringify(header));
+    const encodedPayload = base64URLEncode(JSON.stringify(payload));
+    
+    // Create signature
+    const data = `${encodedHeader}.${encodedPayload}`;
+    const key = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(secret),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+    );
+    
+    const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
+    const encodedSignature = base64URLEncode(new Uint8Array(signature));
+    
+    return `${data}.${encodedSignature}`;
+}
+
+function base64URLEncode(data) {
+    if (typeof data === 'string') {
+        data = new TextEncoder().encode(data);
+    }
+    
+    const base64 = btoa(String.fromCharCode(...data));
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}

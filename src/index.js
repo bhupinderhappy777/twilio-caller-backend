@@ -1,4 +1,35 @@
-import { Twilio } from 'twilio';
+// Helper function to sign a JWT token using the Web Crypto API
+async function signJWT(header, payload, secret) {
+    const encoder = new TextEncoder();
+    
+    // Base64URL encode the header and payload
+    const encodedHeader = base64URLEncode(JSON.stringify(header));
+    const encodedPayload = base64URLEncode(JSON.stringify(payload));
+    
+    const data = `${encodedHeader}.${encodedPayload}`;
+    
+    // Import the secret key
+    const key = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(secret),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+    );
+    
+    // Sign the data
+    const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
+    const encodedSignature = base64URLEncode(new Uint8Array(signature));
+    
+    return `${data}.${encodedSignature}`;
+}
+
+// Helper function for Base64URL encoding
+function base64URLEncode(data) {
+    const base64 = btoa(String.fromCharCode(...new Uint8Array(data)));
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
 
 export default {
     async fetch(request, env) {
@@ -26,27 +57,35 @@ export default {
                 throw new Error('Missing Twilio credentials in environment variables.');
             }
 
-            const AccessToken = Twilio.jwt.AccessToken;
-            const VoiceGrant = AccessToken.VoiceGrant;
-
             // Create a random identity for the client
             const identity = `user_${Math.random().toString(36).substr(2, 9)}`;
 
-            const token = new AccessToken(
-                TWILIO_ACCOUNT_SID,
-                TWILIO_API_KEY,
-                TWILIO_API_SECRET,
-                { identity: identity }
-            );
+            // Manually construct the JWT header and payload
+            const header = {
+                "alg": "HS256",
+                "typ": "JWT",
+                "cty": "twilio-fpa;v=1"
+            };
 
-            const voiceGrant = new VoiceGrant({
-                outgoingApplicationSid: TWILIO_TWIML_APP_SID,
-                incomingAllow: false, // Set to true to allow incoming calls
-            });
+            const now = Math.floor(Date.now() / 1000);
+            const payload = {
+                "jti": `${TWILIO_API_KEY}-${now}`,
+                "iss": TWILIO_API_KEY,
+                "sub": TWILIO_ACCOUNT_SID,
+                "exp": now + 3600, // Token expires in 1 hour
+                "grants": {
+                    "identity": identity,
+                    "voice": {
+                        "outgoing": {
+                            "application_sid": TWILIO_TWIML_APP_SID
+                        }
+                    }
+                }
+            };
 
-            token.addGrant(voiceGrant);
+            const token = await signJWT(header, payload, TWILIO_API_SECRET);
 
-            return new Response(JSON.stringify({ token: token.toJwt() }), {
+            return new Response(JSON.stringify({ token: token }), {
                 headers: { ...headers, 'Content-Type': 'application/json' },
             });
 

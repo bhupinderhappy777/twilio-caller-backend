@@ -7,8 +7,5 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev"
   },
-  "dependencies": {
-    "twilio": "^5.2.2"
-  },
   "type": "module"
 }

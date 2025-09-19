@@ -1,5 +1,5 @@
 {
-  "name": "twilio-caller-backend",
+  "name": "twilio-token-worker",
   "compatibility_date": "2025-09-19",
   "main": "src/index.js",
   "compatibility_flags": ["nodejs_compat"]

@@ -60,8 +60,7 @@ export default {
         timestamp: new Date().toISOString(),
         env_vars: {
           TWILIO_ACCOUNT_SID: env.TWILIO_ACCOUNT_SID?.substring(0, 5) + '...',
-          TWILIO_API_KEY: env.TWILIO_API_KEY?.substring(0, 5) + '...',
-          TWILIO_API_SECRET: env.TWILIO_API_SECRET ? 'Present' : 'Missing',
+          TWILIO_AUTH_TOKEN: env.TWILIO_AUTH_TOKEN ? 'Present' : 'Missing',
           TWILIO_TWIML_APP_SID: env.TWILIO_TWIML_APP_SID?.substring(0, 5) + '...',
           TWILIO_PHONE_NUMBER: env.TWILIO_PHONE_NUMBER?.substring(0, 5) + '...',
         }
@@ -76,7 +75,7 @@ export default {
     // Handle token generation (ONLY for root path)
     if (url.pathname === '/' || url.pathname === '') {
       try {
-        // Create JWT manually (since Twilio SDK might not work in Workers)
+        // Create JWT manually using Account SID and Auth Token
         const header = {
           "alg": "HS256",
           "typ": "JWT"
@@ -84,27 +83,33 @@ export default {
 
         const now = Math.floor(Date.now() / 1000);
         const payload = {
-  "iss": env.TWILIO_ACCOUNT_SID,  // Use Account SID instead of API Key
-  "sub": env.TWILIO_ACCOUNT_SID,
-  "exp": now + 3600,
-  "iat": now,
-  "nbf": now,
-  "jti": `${env.TWILIO_ACCOUNT_SID}-${now}`,  // Use Account SID
-  "grants": {
-    "identity": "user",
-    "voice": {
-      "outgoing": {
-        "application_sid": env.TWILIO_TWIML_APP_SID
-      },
-      "incoming": {
-        "allow": true
-      }
-    }
-  }
-};
+          "iss": env.TWILIO_ACCOUNT_SID,  // Use Account SID instead of API Key
+          "sub": env.TWILIO_ACCOUNT_SID,
+          "exp": now + 3600, // 1 hour
+          "iat": now,
+          "nbf": now,
+          "jti": `${env.TWILIO_ACCOUNT_SID}-${now}`,  // Use Account SID
+          "grants": {
+            "identity": "user",
+            "voice": {
+              "outgoing": {
+                "application_sid": env.TWILIO_TWIML_APP_SID
+              },
+              "incoming": {
+                "allow": true
+              }
+            }
+          }
+        };
 
-// Use Auth Token for signing instead of API Secret
-const key = new TextEncoder().encode(env.TWILIO_AUTH_TOKEN);
+        // Simple JWT creation - FIXED VARIABLE DECLARATIONS
+        const encodedHeader = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+        const encodedPayload = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+        
+        const signatureInput = `${encodedHeader}.${encodedPayload}`;
+        
+        // Create HMAC-SHA256 signature using Auth Token
+        const key = new TextEncoder().encode(env.TWILIO_AUTH_TOKEN);
         const data = new TextEncoder().encode(signatureInput);
         
         const cryptoKey = await crypto.subtle.importKey(

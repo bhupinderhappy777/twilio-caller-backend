@@ -84,33 +84,27 @@ export default {
 
         const now = Math.floor(Date.now() / 1000);
         const payload = {
-          "iss": env.TWILIO_API_KEY,
-          "sub": env.TWILIO_ACCOUNT_SID,
-          "exp": now + 3600, // 1 hour
-          "iat": now,
-          "nbf": now,
-          "jti": `${env.TWILIO_API_KEY}-${now}`,
-          "grants": {
-            "identity": "user",
-            "voice": {
-              "outgoing": {
-                "application_sid": env.TWILIO_TWIML_APP_SID
-              },
-              "incoming": {
-                "allow": true
-              }
-            }
-          }
-        };
+  "iss": env.TWILIO_ACCOUNT_SID,  // Use Account SID instead of API Key
+  "sub": env.TWILIO_ACCOUNT_SID,
+  "exp": now + 3600,
+  "iat": now,
+  "nbf": now,
+  "jti": `${env.TWILIO_ACCOUNT_SID}-${now}`,  // Use Account SID
+  "grants": {
+    "identity": "user",
+    "voice": {
+      "outgoing": {
+        "application_sid": env.TWILIO_TWIML_APP_SID
+      },
+      "incoming": {
+        "allow": true
+      }
+    }
+  }
+};
 
-        // Simple JWT creation
-        const encodedHeader = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-        const encodedPayload = btoa(JSON.stringify(payload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-        
-        const signatureInput = `${encodedHeader}.${encodedPayload}`;
-        
-        // Create HMAC-SHA256 signature
-        const key = new TextEncoder().encode(env.TWILIO_API_SECRET);
+// Use Auth Token for signing instead of API Secret
+const key = new TextEncoder().encode(env.TWILIO_AUTH_TOKEN);
         const data = new TextEncoder().encode(signatureInput);
         
         const cryptoKey = await crypto.subtle.importKey(

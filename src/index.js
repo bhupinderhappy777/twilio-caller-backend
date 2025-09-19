@@ -26,7 +26,12 @@ async function signJWT(header, payload, secret) {
 
 // Helper function for Base64URL encoding
 function base64URLEncode(data) {
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(data)));
+    // If data is a string, convert it to a Uint8Array first
+    if (typeof data === 'string') {
+        data = new TextEncoder().encode(data);
+    }
+    // Now data is guaranteed to be a Uint8Array
+    const base64 = btoa(String.fromCharCode.apply(null, data));
     return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
